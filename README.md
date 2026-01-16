@@ -1,6 +1,10 @@
 # AutoCAD-LISP
 
-## How to install
+**How to download**\
+<img height="300" alt="image" src="https://github.com/user-attachments/assets/91efd6f0-cdd1-493b-abb4-3ac9d53cf29d" />
+
+
+**How to install**
 1. Temporary - simply drag .lsp files to ACAD window one by one. Will reset after relaunch.
 2. Permanently - add to the Startup
 - Place .lsp files to any Trusted Location to avoid popup windows at the start of the program (Options/Files/Trusted Locations, for example C:\Program Files\Autodesk\AutoCAD 2020\Plugins)
@@ -9,7 +13,7 @@
 - Click the Add button.
 - Browse to the location of the LISP file(s), select, then click the Open button.
 
-## Как установить
+**Как установить**
 1. Временно - просто перетащить файлы .lsp в окно ACAD по одному. После перезапуска программы нужно добавлять заново
 2. Постоянно - добавить в автозагрузку
 - Поместить файлы .lsp в любое доверенное расположение, чтобы избежать всплывающих окон при запуске программы (Настройки/Файлы/Доверенные расположения, например C:\Program Files\Autodesk\AutoCAD 2020\Plugins)
