@@ -17,7 +17,7 @@
 ;;; Changelog v1.1:
 ;;; - Fixed warning symbol issue in prompts
 ;;; - Added separate count for total vs supported objects
-;;; - Added support for TEXT, MTEXT, DIMENSION, LEADER, HATCH objects
+;;; - Added support for TEXT, MTEXT, DIMENSION, LEADER, HATCH, CIRCLE objects
 ;;; ============================================================================
 
 (defun C:COORDRND (/ *error* old-vars ss ss-all base-pt round-val 
@@ -34,7 +34,7 @@
   (setq *COORDRND-DEFAULT-BASE-Z* 0.0)       ; Default base point Z
   
   ;; Define supported object types for filtering
-  (setq supported-types '("LINE" "LWPOLYLINE" "POLYLINE" "ARC" "SPLINE" "INSERT"
+  (setq supported-types '("LINE" "LWPOLYLINE" "POLYLINE" "ARC" "CIRCLE" "SPLINE" "INSERT"
                           "TEXT" "MTEXT" "DIMENSION" "LEADER" "HATCH"))
   
   ;; ============================================================================
@@ -69,7 +69,7 @@
   ;; ============================================================================
   
   (princ "\nSelect objects to round coordinates:")
-  (princ "\n  Supported: LINE, PLINE, LWPOLYLINE, ARC, SPLINE, INSERT (blocks),")
+  (princ "\n  Supported: LINE, PLINE, LWPOLYLINE, ARC, CIRCLE, SPLINE, INSERT (blocks),")
   (princ "\n             TEXT, MTEXT, DIMENSION, LEADER, HATCH")
   
   ;; Select all objects first (no filter)
@@ -87,7 +87,7 @@
   (princ (strcat "\nTotal objects selected: " (itoa count-total)))
   
   ;; Filter to get only supported object types
-  (setq ss (ssget "_P" '((0 . "LINE,LWPOLYLINE,POLYLINE,ARC,SPLINE,INSERT,TEXT,MTEXT,DIMENSION,LEADER,HATCH"))))
+  (setq ss (ssget "_P" '((0 . "LINE,LWPOLYLINE,POLYLINE,ARC,CIRCLE,SPLINE,INSERT,TEXT,MTEXT,DIMENSION,LEADER,HATCH"))))
   
   (if (null ss)
     (progn
@@ -195,6 +195,14 @@
       )
       
       ;; ========================================================================
+      ;; CIRCLE - Round center point
+      ;; ========================================================================
+      ((= obj-type "CIRCLE")
+       (setq result (round-circle ent entdata base-pt round-val))
+       (if result (setq count-processed (1+ count-processed)))
+      )
+      
+      ;; ========================================================================									
       ;; SPLINE - Round control points
       ;; ========================================================================
       ((= obj-type "SPLINE")
@@ -402,6 +410,25 @@
 ;; ============================================================================
 
 (defun round-arc (ent entdata base-pt round-val / center-pt new-center)
+  (setq center-pt (cdr (assoc 10 entdata)))
+  (setq new-center (round-point center-pt base-pt round-val))
+  
+  ;; Update entity data
+  (setq entdata (subst (cons 10 new-center) (assoc 10 entdata) entdata))
+  
+  ;; Apply changes to drawing
+  (entmod entdata)
+  (entupd ent)
+  T ; Return success
+)
+
+;; ============================================================================
+;; OBJECT PROCESSOR - CIRCLE
+;; ============================================================================
+;; Rounds the center point (10) of a circle
+;; ============================================================================
+
+(defun round-circle (ent entdata base-pt round-val / center-pt new-center)
   (setq center-pt (cdr (assoc 10 entdata)))
   (setq new-center (round-point center-pt base-pt round-val))
   
