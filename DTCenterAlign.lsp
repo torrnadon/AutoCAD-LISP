@@ -31,7 +31,7 @@
 ;;                           Global Variables                                    ;;
 ;;;==============================================================================;;;
 
-(setq *DTCA$Offset* (if *DTCA$Offset* *DTCA$Offset* 0.5))
+(setq *DTCA$OffsetMult* (if *DTCA$OffsetMult* *DTCA$OffsetMult* 0.4))
 (setq *DTCA$Perp* (if *DTCA$Perp* *DTCA$Perp* T))
 (setq *DTCA$Mirror* (if *DTCA$Mirror* *DTCA$Mirror* nil))
 (setq *DTCA$Side* (if *DTCA$Side* *DTCA$Side* 1)) ; 1 = Top (left), -1 = Bottom (right)
@@ -43,6 +43,7 @@
 (defun *error* (msg)
   (if (not (wcmatch (strcase msg) "*BREAK*,*CANCEL*,*EXIT*"))
     (princ (strcat "\nError: " msg)))
+  (redraw)
   (if doc (vla-EndUndoMark doc))
   (setvar "CMDECHO" cmd)
   (setvar "OSMODE" osm)
@@ -149,7 +150,8 @@
 
 (defun C:DTCENTER (/ doc cmd osm txt txtObj txtType txtStr txtStyle txtHeight
                       lines lineList ss i obj gr data key pt ang
-                      offset perp mirror side previewList)
+                      offset perp mirror side previewList
+                      origInsertPt origAlignPt origAlignment origAttach origRotation)
   
   (setq doc (vla-get-ActiveDocument (vlax-get-acad-object))
         cmd (getvar "CMDECHO")
@@ -167,15 +169,18 @@
             txtStr (GetTextContent txtObj)
             txtStyle (vla-get-StyleName txtObj)
             txtHeight (GetTextHeight txtObj))
-      
-      ;; Change justification to Bottom Center
+
+      (princ (strcat "\nText selected: \"" txtStr "\" (" txtType ", Height=" (rtos txtHeight 2 2) ")"))
+
+      ;; Save original text state for cancel-restore
+      (setq origInsertPt (vlax-get txtObj 'InsertionPoint)
+            origRotation (vla-get-Rotation txtObj))
       (if (= txtType "AcDbText")
-        (progn
-          (vla-put-Alignment txtObj acAlignmentMiddleCenter)
-          (vla-put-TextAlignmentPoint txtObj (vla-get-InsertionPoint txtObj)))
-        (vla-put-AttachmentPoint txtObj acAttachmentPointBottomCenter))
-      
-      ;; Select lines/polylines
+        (setq origAlignment (vla-get-Alignment txtObj)
+              origAlignPt (vlax-get txtObj 'TextAlignmentPoint))
+        (setq origAttach (vla-get-AttachmentPoint txtObj)))
+
+      ;; Select lines/polylines (text stays in place until confirmed)
       (princ "\nSelect LINE or PLINE objects: ")
       (if (setq lines (ssget '((0 . "LINE,LWPOLYLINE,POLYLINE"))))
         (progn
@@ -190,13 +195,22 @@
           
           (setq lineList (reverse lineList))
           
-          ;; Initialize settings
-          (setq offset *DTCA$Offset*
+          ;; Initialize settings (offset as multiplier of text height)
+          (setq offset (* txtHeight *DTCA$OffsetMult*)
                 perp *DTCA$Perp*
                 mirror *DTCA$Mirror*
-                side *DTCA$Side*)
+                side *DTCA$Side*)          
+
+          ;; Now change justification (deferred until lines are selected)
+          ;; side=1 (Top) means text sits above line -> BottomCenter anchor
+          ;; side=-1 (Bottom) means text sits below line -> TopCenter anchor
+          (if (= txtType "AcDbText")
+            (progn
+              (vla-put-Alignment txtObj (if (= side 1) acAlignmentBottomCenter acAlignmentTopCenter))
+              (vla-put-TextAlignmentPoint txtObj (vla-get-InsertionPoint txtObj)))
+            (vla-put-AttachmentPoint txtObj (if (= side 1) acAttachmentPointBottomCenter acAttachmentPointTopCenter)))
           
-          (princ "\n[T] Toggle side | [+/-] Offset | [P] Perpendicular | [M] Mirror | [S] Style | [B] Mask | [Enter] Accept")
+          (princ "\n[T] Toggle side | [+/-] Offset | [P] Perpendicular | [M] Mirror | [S] Style | [B] Mask | [Enter] Accept | [Esc] Cancel")
           (princ (strcat "\nCurrent: Side=" (if (= side 1) "Top" "Bottom") 
                         " | Offset=" (rtos offset 2 2)
                         " | Perp=" (if perp "ON" "OFF")
@@ -204,6 +218,10 @@
           
           ;; Function to update preview
           (defun UpdatePreview (/ lineObj data pt ang tempObj)
+            ;; Clear previous grdraw vectors and highlights
+            (redraw)
+            ;; Highlight the source text object
+            (redraw (vlax-vla-object->ename txtObj) 3)
             ;; Draw preview indicators on all lines
             (foreach lineObj lineList
               (setq data (CalcTextPoint lineObj offset side perp)
@@ -213,14 +231,14 @@
               (if mirror
                 (setq ang (+ ang pi)))
               
-              ;; Draw small cross at text position
-              (grdraw 
-                (list (- (car pt) 0.5) (cadr pt) (caddr pt))
-                (list (+ (car pt) 0.5) (cadr pt) (caddr pt))
+              ;; Draw small cross at text position (scaled to text height)
+              (grdraw
+                (list (- (car pt) (* txtHeight 0.5)) (cadr pt) (caddr pt))
+                (list (+ (car pt) (* txtHeight 0.5)) (cadr pt) (caddr pt))
                 3 1)
-              (grdraw 
-                (list (car pt) (- (cadr pt) 0.5) (caddr pt))
-                (list (car pt) (+ (cadr pt) 0.5) (caddr pt))
+              (grdraw
+                (list (car pt) (- (cadr pt) (* txtHeight 0.5)) (caddr pt))
+                (list (car pt) (+ (cadr pt) (* txtHeight 0.5)) (caddr pt))
                 3 1))
             
             ;; Update first text for preview
@@ -246,28 +264,33 @@
           (setvar "OSMODE" 0)
           
           ;; Preview loop with continuous update
-          (while (not (member (setq gr (grread t 15 0)) '((2 13) (2 32) (25))))
+          ;; Exit on Enter(13), Space(32), Escape(27), or right-click(25)
+          (setq gr nil)
+          (while (not (member (setq gr (grread t 15 0)) '((2 13) (2 32) (2 27))))
             
             (cond
               ;; Mouse movement - just redraw preview
               ((= (car gr) 5)
                (UpdatePreview))
               
-              ;; Toggle Side (T key)
+              ;; Toggle Side (T key) - also switches text anchor between BottomCenter and TopCenter
               ((member gr '((2 84) (2 116)))
                (setq side (- side))
+               (if (= txtType "AcDbText")
+                 (vla-put-Alignment txtObj (if (= side 1) acAlignmentBottomCenter acAlignmentTopCenter))
+                 (vla-put-AttachmentPoint txtObj (if (= side 1) acAttachmentPointBottomCenter acAttachmentPointTopCenter)))
                (UpdatePreview)
                (princ (strcat "\rSide: " (if (= side 1) "Top (Left)" "Bottom (Right)") " | Offset: " (rtos offset 2 2) "          ")))
               
 ;; Increase Offset (+)
 ((member gr '((2 43) 43))
-  (setq offset (+ offset 1))
+  (setq offset (+ offset (* txtHeight 0.1)))
   (UpdatePreview)
   (princ (strcat "\rOffset: " (rtos offset 2 2) "          ")))
 
 ;; Decrease Offset (-)
 ((member gr '((2 45) 45))
-  (setq offset (max 0.0 (- offset 1)))
+  (setq offset (max 0.0 (- offset (* txtHeight 0.1))))
   (UpdatePreview)
   (princ (strcat "\rOffset: " (rtos offset 2 2) "          ")))
               
@@ -312,47 +335,67 @@
                (princ (strcat "\rBackground Mask: " (if (= (vla-get-BackgroundFill txtObj) :vlax-true) "ON" "OFF") "          ")))))
           
           (setvar "OSMODE" osm)
-          
-          ;; Apply to all lines
-          (princ "\n\nApplying text to all lines...")
-          (setq i 0)
-          
-          (foreach lineObj lineList
-            (setq data (CalcTextPoint lineObj offset side perp)
-                  pt (car data)
-                  ang (cadr data))
-            
-            (if mirror
-              (setq ang (+ ang pi)))
-            
-            (if (> i 0)
-              ;; Create copy for additional lines
-              (setq txtObj (vla-Copy txtObj)))
-            
-            ;; Set position and rotation
-            (if (= txtType "AcDbText")
-              (progn
-                (vla-put-TextAlignmentPoint txtObj (vlax-3d-point pt))
-                (vla-put-Rotation txtObj ang))
-              (progn
-                (vla-put-InsertionPoint txtObj (vlax-3d-point pt))
-                (vla-put-Rotation txtObj ang)))
-            
-            (vla-Update txtObj)
-            (setq i (1+ i)))
-          
-          ;; Save settings
-          (setq *DTCA$Offset* offset
-                *DTCA$Perp* perp
-                *DTCA$Mirror* mirror
-                *DTCA$Side* side)
-          
-          (princ (strcat "\n" (itoa (length lineList)) " text objects created/updated.")))
+          ;; Clear all grdraw crosses
+          (redraw)
+
+          ;; Check how the loop exited
+          (if (equal gr '(2 27))
+            ;; Cancelled (Escape) - restore original text state
+            (progn
+              (if (= txtType "AcDbText")
+                (progn
+                  (vla-put-Alignment txtObj origAlignment)
+                  (vlax-put txtObj 'InsertionPoint origInsertPt)
+                  (vlax-put txtObj 'TextAlignmentPoint origAlignPt))
+                (progn
+                  (vla-put-AttachmentPoint txtObj origAttach)
+                  (vlax-put txtObj 'InsertionPoint origInsertPt)))
+              (vla-put-Rotation txtObj origRotation)
+              (vla-Update txtObj)
+              (princ "\n*Cancelled - text restored*"))
+
+            ;; Confirmed (Enter/Space) - apply to all lines
+            (progn
+              (princ "\n\nApplying text to all lines...")
+              (setq i 0)
+
+              (foreach lineObj lineList
+                (setq data (CalcTextPoint lineObj offset side perp)
+                      pt (car data)
+                      ang (cadr data))
+
+                (if mirror
+                  (setq ang (+ ang pi)))
+
+                (if (> i 0)
+                  ;; Create copy for additional lines
+                  (setq txtObj (vla-Copy txtObj)))
+
+                ;; Set position and rotation
+                (if (= txtType "AcDbText")
+                  (progn
+                    (vla-put-TextAlignmentPoint txtObj (vlax-3d-point pt))
+                    (vla-put-Rotation txtObj ang))
+                  (progn
+                    (vla-put-InsertionPoint txtObj (vlax-3d-point pt))
+                    (vla-put-Rotation txtObj ang)))
+
+                (vla-Update txtObj)
+                (setq i (1+ i)))
+
+              ;; Save settings (store offset as multiplier of text height)
+              (setq *DTCA$OffsetMult* (/ offset txtHeight)
+                    *DTCA$Perp* perp
+                    *DTCA$Mirror* mirror
+                    *DTCA$Side* side)
+
+              (princ (strcat "\n" (itoa (length lineList)) " text objects created/updated.")))))
         
         (princ "\n*Cancel*")))
-    
     (princ "\n*Cancel*"))
-  
+
+  ;; Clear any remaining grdraw vectors/highlights
+  (redraw)
   (vla-EndUndoMark doc)
   (setvar "CMDECHO" cmd)
   (setvar "OSMODE" osm)
